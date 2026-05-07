@@ -6,12 +6,51 @@ from utils.common import check_keywords, get_sender_info
 
 logger = logging.getLogger(__name__)
 
+# 已处理的媒体组缓存：{rule_id: {grouped_id: True}}
+# 同一规则中，同一媒体组只处理一次，避免重复转发
+_processed_groups = {}
+_processed_groups_lock = asyncio.Lock()
+
+
+async def _is_first_message_in_group(rule_id, grouped_id):
+    """检查是否是该媒体组在当前规则中的第一条消息"""
+    async with _processed_groups_lock:
+        if rule_id not in _processed_groups:
+            _processed_groups[rule_id] = {}
+        
+        group_cache = _processed_groups[rule_id]
+        
+        if grouped_id in group_cache:
+            return False  # 已处理过
+        
+        group_cache[grouped_id] = True
+        # 30秒后清理，避免内存泄漏
+        asyncio.create_task(_cleanup_group_cache(rule_id, grouped_id, delay=30))
+        return True  # 第一次处理
+
+
+async def _cleanup_group_cache(rule_id, grouped_id, delay=30):
+    """延迟清理缓存"""
+    await asyncio.sleep(delay)
+    async with _processed_groups_lock:
+        if rule_id in _processed_groups:
+            _processed_groups[rule_id].pop(grouped_id, None)
+
 
 async def process_forward_rule(client, event, chat_id, rule):
     """处理转发规则（用户模式）"""
     if not rule.enable_rule:
         logger.info(f'规则 ID: {rule.id} 已禁用，跳过处理')
         return
+
+    # 媒体组去重：同一规则中，同一媒体组只处理一次
+    if event.message.grouped_id:
+        is_first = await _is_first_message_in_group(rule.id, event.message.grouped_id)
+        if not is_first:
+            logger.info(f'规则 ID: {rule.id} 跳过重复媒体组消息 (grouped_id={event.message.grouped_id}, msg_id={event.message.id})')
+            return
+        # 等待同组其他消息全部到达
+        await asyncio.sleep(2)
 
     message_text = event.message.text or ''
     check_message_text = message_text
@@ -34,8 +73,8 @@ async def process_forward_rule(client, event, chat_id, rule):
         target_chat = rule.target_chat
         target_chat_id = int(target_chat.telegram_chat_id)
         try:
-            # 读取用户模式发送方式，兼容旧数据库（没有该字段时默认 FORWARD）
-            copy_mode = getattr(rule, 'user_copy_mode', UserForwardMode.FORWARD)
+            # 读取用户模式发送方式，兼容旧数据库（没有该字段时默认 COPY - 隐藏来源）
+            copy_mode = getattr(rule, 'user_copy_mode', UserForwardMode.COPY)
 
             if copy_mode == UserForwardMode.COPY:
                 await _copy_send(client, event, target_chat_id, target_chat)
