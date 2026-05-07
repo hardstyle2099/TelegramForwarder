@@ -16,8 +16,10 @@ load_dotenv()
 # 获取logger
 logger = logging.getLogger(__name__)
 
-# 添加一个缓存来存储已处理的媒体组
+# 添加一个缓存来存储已处理的媒体组（按规则ID区分）
+# 格式: {rule_id: {grouped_id: True}}
 PROCESSED_GROUPS = set()
+PROCESSED_RULE_GROUPS = {}
 
 BOT_ID = None
 
@@ -150,6 +152,15 @@ async def handle_user_message(event, user_client, bot_client):
             if not rule.enable_rule:
                 logger.info(f'规则 {rule.id} 未启用')
                 continue
+            
+            # 媒体组去重：同一规则+同一媒体组只处理一次
+            if event.message.grouped_id:
+                if not is_first_in_rule_group(rule.id, event.message.grouped_id):
+                    logger.info(f'规则 {rule.id} 跳过重复媒体组消息 (grouped_id={event.message.grouped_id}, msg_id={event.message.id})')
+                    continue
+                # 等待同组其他消息全部到达
+                await asyncio.sleep(2)
+            
             logger.info(f'处理转发规则 ID: {rule.id} (从 {source_chat.name} 转发到: {target_chat.name})')
             if rule.use_bot:
                 # 直接使用过滤器模块中的process_forward_rule函数
@@ -206,5 +217,32 @@ async def handle_bot_message(event, bot_client):
 async def clear_group_cache(group_key, delay=300):  # 5分钟后清除缓存
     """清除已处理的媒体组记录"""
     await asyncio.sleep(delay)
-    PROCESSED_GROUPS.discard(group_key) 
+    PROCESSED_GROUPS.discard(group_key)
+
+
+def is_first_in_rule_group(rule_id, grouped_id):
+    """
+    检查是否是该规则+媒体组的第一条消息
+    返回 True 表示第一次处理，False 表示已处理过
+    """
+    global PROCESSED_RULE_GROUPS
+    
+    if rule_id not in PROCESSED_RULE_GROUPS:
+        PROCESSED_RULE_GROUPS[rule_id] = {}
+    
+    if grouped_id in PROCESSED_RULE_GROUPS[rule_id]:
+        return False  # 已处理过
+    
+    PROCESSED_RULE_GROUPS[rule_id][grouped_id] = True
+    # 30秒后清理
+    asyncio.create_task(clear_rule_group_cache(rule_id, grouped_id))
+    return True
+
+
+async def clear_rule_group_cache(rule_id, grouped_id, delay=30):
+    """清除规则级别的媒体组缓存"""
+    await asyncio.sleep(delay)
+    global PROCESSED_RULE_GROUPS
+    if rule_id in PROCESSED_RULE_GROUPS:
+        PROCESSED_RULE_GROUPS[rule_id].pop(grouped_id, None) 
 
