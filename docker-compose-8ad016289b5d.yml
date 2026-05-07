@@ -1,0 +1,28 @@
+services:
+  telegram-forwarder:
+    image: heavrnl/telegramforwarder:latest
+    container_name: telegram-forwarder
+    # 如果需要使用 RSS 功能，请取消以下注释
+    # ports:
+    #   - 9804:8000
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./db:/app/db
+      - ./.env:/app/.env
+      - ./logs:/app/logs
+      - ./sessions:/app/sessions
+      - ./temp:/app/temp
+      - ./ufb/config:/app/ufb/config
+      - ./config:/app/config
+      - ./rss/data:/app/rss/data
+      - ./rss/media:/app/rss/media
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    stdin_open: true
+    tty: true
+

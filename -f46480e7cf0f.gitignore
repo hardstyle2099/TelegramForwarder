@@ -1,0 +1,35 @@
+# 环境变量文件
+.env
+
+# 数据库文件
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# Telethon session 文件
+*.session
+*.session-journal 
+/.idea
+/example
+/config
+/ufb/.idea
+ufb/config/config.json
+/images/logo/svg
+/test
+db/forward.db1
+handlers/bot_handler copy.py
+/temp
+使用场景示例.md
+/rss/media
+/rss/data
+
+/logs
+logs/telegram_forwarder.log
