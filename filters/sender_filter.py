@@ -147,8 +147,6 @@ class SenderFilter(BaseFilter):
         except Exception as e:
             logger.error(f'发送媒体组消息时出错: {str(e)}')
             raise
-            else:
-                logger.info(f'推送功能已启用，保留临时文件')
     
     async def _send_single_media(self, context, target_chat_id, parse_mode):
         """发送单条媒体消息 - 直接使用media对象"""
