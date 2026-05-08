@@ -110,17 +110,15 @@ async def _native_forward(client, event, target_chat_id, target_chat):
 
 async def _copy_send(client, event, target_chat_id, target_chat):
     """
-    复制发送模式：
-    - 不显示 Forwarded from 来源头
-    - 直接传递 message.media 对象（Telegram file_id），不下载文件到本地
-    - 视频保持流媒体特性，可在线观看
+    复制发送模式：用 forward_messages 保持完整的媒体组结构
+    这样可以确保目标频道的视频格式完全与源频道一致
     """
     message = event.message
 
     if message.grouped_id:
-        # 媒体组：收集同组所有消息
+        # 媒体组：必须用 forward_messages 来保持媒体组绑定
         await asyncio.sleep(1)
-        group_messages = []
+        message_ids = []
         async for msg in client.iter_messages(
             event.chat_id,
             limit=20,
@@ -128,31 +126,16 @@ async def _copy_send(client, event, target_chat_id, target_chat):
             max_id=message.id + 10
         ):
             if msg.grouped_id == message.grouped_id:
-                group_messages.append(msg)
+                message_ids.append(msg.id)
                 logger.info(f'找到媒体组消息: ID={msg.id}')
-        group_messages.sort(key=lambda m: m.id)
-
-        # 收集媒体文件（直接使用 media 对象，不下载）
-        media_list = [msg.media for msg in group_messages if msg.media]
-        caption = group_messages[0].text if group_messages else ''
-
-        if media_list:
-            await client.send_file(target_chat_id, media_list, caption=caption)
-            logger.info(f'[用户-复制] 已发送 {len(media_list)} 条媒体组消息到: {target_chat.name} ({target_chat_id})')
-        elif caption:
-            await client.send_message(target_chat_id, caption)
-            logger.info(f'[用户-复制] 已发送纯文本组消息到: {target_chat.name} ({target_chat_id})')
-
+        
+        message_ids.sort()
+        
+        if message_ids:
+            # 用 forward_messages 转发，保持媒体组结构
+            await client.forward_messages(target_chat_id, message_ids, event.chat_id)
+            logger.info(f'[用户-复制] 已转发 {len(message_ids)} 条媒体组消息到: {target_chat.name} ({target_chat_id}) - 媒体组结构完整保留')
     else:
-        if message.media:
-            # 有媒体：直接传递 media 对象，Telethon 内部使用相同的 file_id，不会下载
-            await client.send_file(
-                target_chat_id,
-                message.media,
-                caption=message.text or ''
-            )
-            logger.info(f'[用户-复制] 媒体消息已发送到: {target_chat.name} ({target_chat_id})')
-        else:
-            # 纯文本
-            await client.send_message(target_chat_id, message.text or '')
-            logger.info(f'[用户-复制] 文本消息已发送到: {target_chat.name} ({target_chat_id})')
+        # 单条消息：也用 forward_messages 保持原始属性
+        await client.forward_messages(target_chat_id, message.id, event.chat_id)
+        logger.info(f'[用户-复制] 单条消息已转发到: {target_chat.name} ({target_chat_id})')
