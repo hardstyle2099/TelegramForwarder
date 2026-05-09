@@ -7,30 +7,22 @@ from utils.common import check_keywords, get_sender_info
 
 logger = logging.getLogger(__name__)
 
-# 已处理的媒体组缓存：{(rule_id, grouped_id): timestamp}
-# 同一规则中，同一媒体组只处理一次，3秒内自动过期
-_processed_groups = {}
+# 已处理的媒体组缓存：存储已处理过的 (source_chat_id, grouped_id) 对
+# 防止同一个媒体组被重复转发
+_processed_media_groups = set()  # {(chat_id, grouped_id), ...}
+_processed_groups_lock = asyncio.Lock()
 
 
-def _is_first_message_in_group(rule_id, grouped_id):
-    """检查是否是该媒体组在当前规则中的第一条消息（非异步，避免 Lock 问题）"""
-    cache_key = (rule_id, grouped_id)
-    current_time = time.time()
-    
-    # 清理过期的缓存（3秒）
-    expired_keys = [k for k, v in _processed_groups.items() if current_time - v > 3]
-    for k in expired_keys:
-        del _processed_groups[k]
-    
-    # 检查是否已处理
-    if cache_key in _processed_groups:
-        logger.info(f'规则 ID: {rule_id} 跳过重复媒体组消息 (grouped_id={grouped_id})')
-        return False
-    
-    # 标记为已处理
-    _processed_groups[cache_key] = current_time
-    logger.info(f'规则 ID: {rule_id} 处理媒体组消息 (grouped_id={grouped_id})')
-    return True
+async def _mark_group_as_processed(chat_id, grouped_id):
+    """标记一个媒体组为已处理"""
+    async with _processed_groups_lock:
+        _processed_media_groups.add((chat_id, grouped_id))
+
+
+async def _is_group_processed(chat_id, grouped_id):
+    """检查一个媒体组是否已处理过"""
+    async with _processed_groups_lock:
+        return (chat_id, grouped_id) in _processed_media_groups
 
 
 async def process_forward_rule(client, event, chat_id, rule):
@@ -39,18 +31,23 @@ async def process_forward_rule(client, event, chat_id, rule):
         logger.info(f'规则 ID: {rule.id} 已禁用，跳过处理')
         return
 
-    # 媒体组去重：同一规则中，同一媒体组只处理一次
+    # 媒体组去重：基于源聊天 ID + grouped_id，防止同一媒体组被重复处理
     if event.message.grouped_id:
-        logger.info(f'[DEBUG] 检测到媒体组: grouped_id={event.message.grouped_id}, msg_id={event.message.id}')
-        is_first = _is_first_message_in_group(rule.id, event.message.grouped_id)
-        logger.info(f'[DEBUG] 去重结果: is_first={is_first}')
-        if not is_first:
-            logger.info(f'[DEBUG] 跳过处理此消息')
+        logger.info(f'[DEBUG] 检测到媒体组 - chat_id={event.chat_id}, grouped_id={event.message.grouped_id}, msg_id={event.message.id}')
+        
+        # 检查是否已处理过这个媒体组
+        if await _is_group_processed(event.chat_id, event.message.grouped_id):
+            logger.info(f'[DEBUG] 跳过已处理的媒体组 (grouped_id={event.message.grouped_id})')
             return
+        
+        # 标记为已处理
+        await _mark_group_as_processed(event.chat_id, event.message.grouped_id)
+        logger.info(f'[DEBUG] 处理新的媒体组 (grouped_id={event.message.grouped_id})')
+        
         # 等待同组其他消息全部到达
         await asyncio.sleep(2)
     else:
-        logger.info(f'[DEBUG] 单条消息, msg_id={event.message.id}')
+        logger.info(f'[DEBUG] 单条消息 - msg_id={event.message.id}')
 
     message_text = event.message.text or ''
     check_message_text = message_text
