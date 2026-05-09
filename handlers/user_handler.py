@@ -41,11 +41,16 @@ async def process_forward_rule(client, event, chat_id, rule):
 
     # 媒体组去重：同一规则中，同一媒体组只处理一次
     if event.message.grouped_id:
+        logger.info(f'[DEBUG] 检测到媒体组: grouped_id={event.message.grouped_id}, msg_id={event.message.id}')
         is_first = _is_first_message_in_group(rule.id, event.message.grouped_id)
+        logger.info(f'[DEBUG] 去重结果: is_first={is_first}')
         if not is_first:
+            logger.info(f'[DEBUG] 跳过处理此消息')
             return
         # 等待同组其他消息全部到达
         await asyncio.sleep(2)
+    else:
+        logger.info(f'[DEBUG] 单条消息, msg_id={event.message.id}')
 
     message_text = event.message.text or ''
     check_message_text = message_text
