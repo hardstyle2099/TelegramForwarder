@@ -2,39 +2,35 @@ from enums.enums import UserForwardMode
 import re
 import logging
 import asyncio
+import time
 from utils.common import check_keywords, get_sender_info
 
 logger = logging.getLogger(__name__)
 
-# 已处理的媒体组缓存：{rule_id: {grouped_id: True}}
-# 同一规则中，同一媒体组只处理一次，避免重复转发
+# 已处理的媒体组缓存：{(rule_id, grouped_id): timestamp}
+# 同一规则中，同一媒体组只处理一次，3秒内自动过期
 _processed_groups = {}
-_processed_groups_lock = asyncio.Lock()
 
 
-async def _is_first_message_in_group(rule_id, grouped_id):
-    """检查是否是该媒体组在当前规则中的第一条消息"""
-    async with _processed_groups_lock:
-        if rule_id not in _processed_groups:
-            _processed_groups[rule_id] = {}
-        
-        group_cache = _processed_groups[rule_id]
-        
-        if grouped_id in group_cache:
-            return False  # 已处理过
-        
-        group_cache[grouped_id] = True
-        # 30秒后清理，避免内存泄漏
-        asyncio.create_task(_cleanup_group_cache(rule_id, grouped_id, delay=30))
-        return True  # 第一次处理
-
-
-async def _cleanup_group_cache(rule_id, grouped_id, delay=30):
-    """延迟清理缓存"""
-    await asyncio.sleep(delay)
-    async with _processed_groups_lock:
-        if rule_id in _processed_groups:
-            _processed_groups[rule_id].pop(grouped_id, None)
+def _is_first_message_in_group(rule_id, grouped_id):
+    """检查是否是该媒体组在当前规则中的第一条消息（非异步，避免 Lock 问题）"""
+    cache_key = (rule_id, grouped_id)
+    current_time = time.time()
+    
+    # 清理过期的缓存（3秒）
+    expired_keys = [k for k, v in _processed_groups.items() if current_time - v > 3]
+    for k in expired_keys:
+        del _processed_groups[k]
+    
+    # 检查是否已处理
+    if cache_key in _processed_groups:
+        logger.info(f'规则 ID: {rule_id} 跳过重复媒体组消息 (grouped_id={grouped_id})')
+        return False
+    
+    # 标记为已处理
+    _processed_groups[cache_key] = current_time
+    logger.info(f'规则 ID: {rule_id} 处理媒体组消息 (grouped_id={grouped_id})')
+    return True
 
 
 async def process_forward_rule(client, event, chat_id, rule):
@@ -45,9 +41,8 @@ async def process_forward_rule(client, event, chat_id, rule):
 
     # 媒体组去重：同一规则中，同一媒体组只处理一次
     if event.message.grouped_id:
-        is_first = await _is_first_message_in_group(rule.id, event.message.grouped_id)
+        is_first = _is_first_message_in_group(rule.id, event.message.grouped_id)
         if not is_first:
-            logger.info(f'规则 ID: {rule.id} 跳过重复媒体组消息 (grouped_id={event.message.grouped_id}, msg_id={event.message.id})')
             return
         # 等待同组其他消息全部到达
         await asyncio.sleep(2)
