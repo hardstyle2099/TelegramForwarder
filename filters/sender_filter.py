@@ -96,61 +96,49 @@ class SenderFilter(BaseFilter):
             return False
     
     async def _send_media_group(self, context, target_chat_id, parse_mode):
-        """发送媒体组消息 - 直接使用media对象保持媒体组结构"""
-        rule = context.rule
+        """
+        发送媒体组消息 - 使用 forward_messages 保持完整的媒体组结构
+        
+        重要：send_file 无法保持媒体组的 grouped_id 绑定，必须使用 forward_messages
+        """
         client = context.client
         event = context.event
         # 初始化转发消息列表
         context.forwarded_messages = []
         
-        # 直接使用 message.media 对象，而不是下载文件
-        media_list = []
         try:
+            # 收集媒体组的所有消息ID
+            message_ids = []
             for message in context.media_group_messages:
                 if message.media:
-                    media_list.append(message.media)
+                    message_ids.append(message.id)
             
-            if media_list:
-                # 添加发送者信息和消息文本
-                caption_text = context.sender_info + context.message_text
+            if message_ids:
+                # 按ID排序，保持原有顺序
+                message_ids.sort()
                 
-                # 如果有超限文件，添加提示信息
-                for message, size, name in context.skipped_media:
-                    caption_text += f"\n\n⚠️ 媒体文件 {name if name else '未命名文件'} ({size}MB) 超过大小限制"
-                
-                if context.skipped_media:
-                    context.original_link = f"\n原始消息: https://t.me/c/{str(event.chat_id)[4:]}/{event.message.id}"
-                
-                # 添加时间信息和原始链接
-                caption_text += context.time_info + context.original_link
-                
-                # 直接使用media对象发送，保持媒体组结构
-                sent_messages = await client.send_file(
+                # 使用 forward_messages 转发，这样可以完整保留媒体组结构
+                sent_messages = await client.forward_messages(
                     target_chat_id,
-                    media_list,
-                    caption=caption_text,
-                    parse_mode=parse_mode,
-                    buttons=context.buttons,
-                    link_preview={
-                        PreviewMode.ON: True,
-                        PreviewMode.OFF: False,
-                        PreviewMode.FOLLOW: context.event.message.media is not None
-                    }[rule.is_preview]
+                    message_ids,
+                    event.chat_id
                 )
+                
                 # 保存发送的消息到上下文
                 if isinstance(sent_messages, list):
                     context.forwarded_messages = sent_messages
                 else:
                     context.forwarded_messages = [sent_messages]
                 
-                logger.info(f'媒体组消息已发送（保持媒体组结构），共 {len(context.forwarded_messages)} 条消息')
+                logger.info(f'媒体组消息已转发（保持媒体组结构），共 {len(context.forwarded_messages)} 条消息')
         except Exception as e:
             logger.error(f'发送媒体组消息时出错: {str(e)}')
             raise
     
     async def _send_single_media(self, context, target_chat_id, parse_mode):
-        """发送单条媒体消息 - 直接使用media对象"""
-        rule = context.rule
+        """
+        发送单条媒体消息 - 使用 forward_messages 保持原始属性
+        """
         client = context.client
         event = context.event
         
@@ -179,28 +167,14 @@ class SenderFilter(BaseFilter):
             logger.info(f'媒体文件超过大小限制，仅转发文本')
             return
         
-        # 直接使用event.message.media对象，而不是下载文件
+        # 使用 forward_messages 转发单条消息
         try:
-            caption = (
-                context.sender_info + 
-                context.message_text + 
-                context.time_info + 
-                context.original_link
-            )
-            
-            await client.send_file(
+            await client.forward_messages(
                 target_chat_id,
-                event.message.media,
-                caption=caption,
-                parse_mode=parse_mode,
-                buttons=context.buttons,
-                link_preview={
-                    PreviewMode.ON: True,
-                    PreviewMode.OFF: False,
-                    PreviewMode.FOLLOW: context.event.message.media is not None
-                }[rule.is_preview]
+                event.message.id,
+                event.chat_id
             )
-            logger.info(f'媒体消息已发送')
+            logger.info(f'单条媒体消息已转发')
         except Exception as e:
             logger.error(f'发送媒体消息时出错: {str(e)}')
             raise
